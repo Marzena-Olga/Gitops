@@ -1,0 +1,44 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: nam-template-applicationset
+  namespace: argocd
+spec:
+  generators:
+  - list:
+      elements:
+      - name: app-template
+        namespace: appset-template
+        repoURL: docker.io
+        imageRepo: alpine
+  template:
+    metadata:
+      name: '{{name}}'
+      annotations:
+        argocd-image-updater.argoproj.io/image-list: app={{imageRepo}}
+        argocd-image-updater.argoproj.io/app.update-strategy: latest
+        argocd-image-updater.argoproj.io/app.allow-tags: regexp:.*
+        argocd-image-updater.argoproj.io/app.helm.image-name: image.repository
+        argocd-image-updater.argoproj.io/app.helm.image-tag: image.tag
+    spec:
+      project: default
+      source:
+        repoURL: '{{repoURL}}'
+        targetRevision: HEAD
+        path: ./chart
+        helm:
+          valueFiles:
+          - values.yaml
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+          enabled: true
+        syncOptions:
+        - CreateNamespace=true
+        - ApplyOutOfSyncOnly=true
+
+
