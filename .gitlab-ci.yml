@@ -1,0 +1,39 @@
+stages:
+  - seal #prepare secrets for ArgoCD/Deployment
+  - lint
+  - trigger
+
+include:
+  - local: 'sealed-secrets-ci.yml'
+
+variables:
+  HELM_VERSION: "3.12.0"
+
+before_script:
+  # install helm 
+  - apk add --no-cache bash curl openssl kubectl
+  - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  - helm version
+  - kubectl version
+
+lint_chart:
+  stage: lint
+  script:
+    - echo "🔹 Linting Helm chart"
+    - helm lint ./chart
+
+    - echo "🔹 Rendering Helm templates"
+    - helm template test ./chart > rendered.yaml
+
+    - echo "🔹 Validating manifests"
+    - kubectl create --dry-run=client -f rendered.yaml
+  tags:
+    - kube
+  allow_failure: false
+
+trigger-generator:
+  stage: trigger
+  trigger:
+    project: nam/common/deployment/argocd-applicationset
+    branch: main
+    strategy: depend
