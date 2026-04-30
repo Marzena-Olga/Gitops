@@ -38,9 +38,12 @@ encoded_group = urllib.parse.quote(CI_PROJECT_NAMESPACE, safe="")
 GROUP_URL = f"https://gitlab.nam.cz/api/v4/groups/{encoded_group}/projects"
 
 VALUES_FILE_PATH = "chart/values.yaml"
-APPLICATION_NAME = "nam-template-applicationset"
+APPLICATION_NAME = "nam-1bp-applicationset"
 
 NAMESPACE = "argocd"
+
+APP_NAMESPACE = "app-template"
+
 
 # =========================
 # UTIL
@@ -95,7 +98,6 @@ def extract_app_data(project):
     - image repo
     - tag
     - app name
-    - deployment
     """
 
     project_path = project["path_with_namespace"]
@@ -132,7 +134,7 @@ def extract_app_data(project):
 
         return {
             "name": app_name,
-            "namespace": app_name,
+            "namespace": APP_NAMESPACE,
             "git": project["http_url_to_repo"],
             "url": project["web_url"],
             "image_repo": image_repo,
@@ -179,7 +181,8 @@ def generate_applicationset(apps):
                             {
                                 "name": a["name"],
                                 "repoURL": a["git"],
-                                "imageRepo": a["image_repo"]
+                                "imageRepo": a["image_repo"],
+                                "namespace": a["namespace"]
                             }
                             for a in apps
                         ]
@@ -201,7 +204,7 @@ def generate_applicationset(apps):
                     "project": "default",
                     "source": {
                         "repoURL": "{{repoURL}}",
-                        "targetRevision": "HEAD",
+                        "targetRevision": "main",
                         "path": "./chart",
                         "helm": {
                             "valueFiles": ["values.yaml"]
@@ -209,7 +212,7 @@ def generate_applicationset(apps):
                     },
                     "destination": {
                         "server": "https://kubernetes.default.svc",
-                        "namespace": "{{name}}"
+                        "namespace": "{{namespace}}"
                     },
                     "syncPolicy": {
                         "automated": {
@@ -226,7 +229,6 @@ def generate_applicationset(apps):
             }
         }
     }
-
 
 def register_repos(apps):
 
@@ -247,8 +249,6 @@ def register_repos(apps):
         #print(data)
         response = requests.post(url, json=data, headers=headers, verify=False)
         print(a['name'], response.status_code, response.text)
-
-
 
 
 # =========================
