@@ -1,0 +1,117 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nam-template.fullname" . }}
+  labels:
+    {{- include "nam-template.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "nam-template.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "nam-template.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "nam-template.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+         
+          volumeMounts:            
+            - name: sql-volume
+              mountPath: /sql  
+          
+          {{- if or .Values.appConfig .Values.secretEnv .Values.env }}
+          env:
+            {{- if .Values.appConfig }}
+            {{- range $key, $value := .Values.appConfig }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+
+            {{- include "nam-template.dbEnv" (dict 
+                "Values" .Values
+                "userSecret" (dict 
+                    "name" .Values.db.user.secretName 
+                    "key" .Values.db.user.usernameKey 
+                    "passwordKey" .Values.db.user.passwordKey
+                )
+            ) | nindent 12 }}
+
+            {{- if .Values.env }}
+            {{- toYaml .Values.env | nindent 2 }}
+            {{- end }}
+          {{- end }}
+
+          command: ["sh", "-c"]
+          args:
+            - |
+              while true; do
+                echo "Executing SQL scripts..."
+                for f in /sql/*.sql; do
+                  [ -f "$f" ] && PGPASSWORD=$dbPass psql -h $dbHost -U $dbUser -d $dbName -f "$f"
+                done
+                echo "Sleeping 5 minutes..."
+                sleep 300  
+              done
+
+      volumes:
+        - name: sql-volume
+          configMap:
+            name: {{ .Release.Name }}-sql
+        {{- with .Values.volumes }}
+        {{- toYaml . | nindent 2 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

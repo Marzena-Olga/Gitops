@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-sql
+data:
+  klient.sql: |
+{{ .Values.appConfig.sql.klient | indent 4 }}

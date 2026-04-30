@@ -1,0 +1,15 @@
+{{- if .Values.dbInit.logs.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nam-template.fullname" . }}-logs
+  labels:
+    app: {{ include "nam-template.name" . }}
+spec:
+  accessModes:
+{{ toYaml .Values.dbInit.logs.accessModes | indent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.dbInit.logs.size }}
+  storageClassName: {{ .Values.dbInit.logs.storageClassName }}
+{{- end }}

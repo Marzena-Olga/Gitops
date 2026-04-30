@@ -1,0 +1,156 @@
+{{- if .Values.dbInit.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nam-template.fullname" . }}-db-init
+  labels:
+    app: {{ include "nam-template.name" . }}
+    chart: {{ include "nam-template.chart" . }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+  annotations:
+    #"helm.sh/hook": pre-install,pre-upgrade
+    #"helm.sh/hook-weight": "0"
+    argocd.argoproj.io/hook: Sync
+    #argocd.argoproj.io/hook-delete-policy: HookSucceeded,HookFailed
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation #HookSucceeded
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  ttlSecondsAfterFinished: 1200
+  template:
+    metadata:
+      name: {{ include "nam-template.fullname" . }}-db-init
+      labels:
+        app: {{ include "nam-template.name" . }}
+    spec:
+      serviceAccountName: {{ include "nam-template.serviceAccountName" . }}
+      restartPolicy: OnFailure
+      initContainers:
+        - name: db-create
+          image: postgres:16
+          env:
+            {{- include "nam-template.dbEnv" (dict 
+                "Values" .Values
+                "userSecret" (dict "name" .Values.db.user.secretName "key" .Values.db.user.usernameKey "passwordKey" .Values.db.user.passwordKey)
+                "ownerSecret" (dict "name" .Values.db.owner.secretName "key" .Values.db.owner.usernameKey "passwordKey" .Values.db.owner.passwordKey)
+                "superuserSecret" (dict "name" .Values.db.superuser.secretName "key" .Values.db.superuser.usernameKey "passwordKey" .Values.db.superuser.passwordKey)
+            ) | nindent 12 }}  
+
+          command:
+          - /bin/sh
+          - -c
+          - |
+            set -e
+            PGPASSWORD=$dbSuperuserPass psql -h {{ .Values.appConfig.dbHost }} -p {{ .Values.appConfig.dbPort }} -U $dbSuperuser -d postgres <<EOF
+            GRANT ALL PRIVILEGES ON DATABASE {{ .Values.appConfig.dbName }} TO $dbSuperuser;
+            SELECT 'CREATE USER $dbUser WITH PASSWORD ''$dbPass''' WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '$dbUser')\gexec
+            SELECT 'CREATE USER $dbOwner WITH PASSWORD ''$dbOwnerPass''' WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '$dbOwner')\gexec
+            SELECT 'CREATE DATABASE {{ .Values.appConfig.dbName }} OWNER $dbOwner' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ .Values.appConfig.dbName }}')\gexec
+            EOF
+
+            PGPASSWORD=$dbSuperuserPass psql -h {{ .Values.appConfig.dbHost }} -p {{ .Values.appConfig.dbPort }} -U $dbSuperuser -d {{ .Values.appConfig.dbName }} <<EOF
+            -- access to DB
+            -- GRANT CONNECT ON DATABASE {{ .Values.appConfig.dbName }} TO $dbOwner;
+            GRANT CONNECT ON DATABASE {{ .Values.appConfig.dbName }} TO $dbUser;
+            -- secure schema
+            REVOKE ALL ON SCHEMA public FROM PUBLIC;
+            -- schema ownership
+            ALTER SCHEMA public OWNER TO $dbOwner;
+            -- OWNER full rights
+            GRANT ALL ON SCHEMA public TO $dbOwner;
+            -- USER only usage
+            GRANT USAGE ON SCHEMA public TO $dbUser;
+            EOF
+            
+            PGPASSWORD=$dbSuperuserPass psql -h {{ .Values.appConfig.dbHost }} -p {{ .Values.appConfig.dbPort }} -U $dbSuperuser -d {{ .Values.appConfig.dbName }} <<EOF
+            -- OWNER
+            GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $dbOwner;
+            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $dbOwner;
+            -- USER (CRUD)
+            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO $dbUser;
+            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO $dbUser;
+            EOF
+
+            PGPASSWORD=$dbSuperuserPass psql -h {{ .Values.appConfig.dbHost }} -p {{ .Values.appConfig.dbPort }} -U $dbSuperuser -d {{ .Values.appConfig.dbName }} <<EOF
+            -- OWNER create new objects
+            ALTER DEFAULT PRIVILEGES FOR ROLE $dbOwner IN SCHEMA public
+            GRANT ALL ON TABLES TO $dbOwner;
+            ALTER DEFAULT PRIVILEGES FOR ROLE $dbOwner IN SCHEMA public
+            GRANT ALL ON SEQUENCES TO $dbOwner;
+            -- USER get CRUD access to new tables
+            ALTER DEFAULT PRIVILEGES FOR ROLE $dbOwner IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO $dbUser;
+            ALTER DEFAULT PRIVILEGES FOR ROLE $dbOwner IN SCHEMA public
+            GRANT USAGE, SELECT ON SEQUENCES TO $dbUser;
+            EOF
+
+      containers:      
+        - name: db-init
+          image: "{{ default .Values.image.repository .Values.dbInit.image.repository }}:{{ default .Values.image.tag .Values.dbInit.image.tag }}"
+          imagePullPolicy: {{ default .Values.image.pullPolicy .Values.dbInit.image.pullPolicy }}
+
+          
+          volumeMounts:
+            {{- if .Values.dbInit.logs.enabled }}
+            - name: job-logs
+              mountPath: {{ .Values.dbInit.logs.mountPath }}
+             {{- end }}  
+            - name: sql-volume
+              mountPath: {{ .Values.dbInit.sqlConfigMap.mountPath }}
+              readOnly: true  
+
+          env:
+            - name: LOGGING_FILE_PATH
+              value: {{ if .Values.dbInit.logs.enabled }}{{ .Values.dbInit.logs.mountPath }}{{ else }}""{{ end }}
+            - name: SPRING_PROFILES_ACTIVE
+              value: "dbinit-only"
+            - name: dbUrl
+              value: "jdbc:postgresql://{{ .Values.appConfig.dbHost }}:{{ .Values.appConfig.dbPort }}/{{ .Values.appConfig.dbName }}"
+
+            - name: dbUser
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.owner.secretName }}
+                  key: {{ .Values.db.owner.usernameKey }}
+
+            - name: dbPass
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.owner.secretName }}
+                  key: {{ .Values.db.owner.passwordKey }}
+
+            {{- include "nam-template.dbEnv" (dict 
+                "Values" .Values
+            ) | nindent 12 }}  
+
+      volumes:
+        {{- if .Values.dbInit.logs.enabled }}
+        - name: job-logs
+          persistentVolumeClaim:
+            claimName: {{ include "nam-template.fullname" . }}-logs
+        {{- end }}
+        - name: sql-volume
+          configMap:
+            name: {{ .Values.dbInit.sqlConfigMap.name }}
+            items:
+              - key: {{ .Values.dbInit.sqlConfigMap.key }}
+                path: {{ .Values.dbInit.sqlConfigMap.key }}          
+
+      {{- with .Values.dbInit.imagePullSecrets }}
+      imagePullSecrets:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      restartPolicy: OnFailure 
+      {{- with .Values.dbInit.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dbInit.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dbInit.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

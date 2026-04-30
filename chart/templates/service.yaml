@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nam-template.fullname" . }}
+  labels:
+    {{- include "nam-template.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+      nodePort: {{ .Values.service.nodeport }}
+  externalIPs: 
+{{- range .Values.service.externalips }}
+  - {{ . }}
+{{- end }}
+
+  selector:
+    {{- include "nam-template.selectorLabels" . | nindent 4 }}
